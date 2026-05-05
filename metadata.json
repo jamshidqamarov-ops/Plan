@@ -1,0 +1,6 @@
+{
+  "name": "План дома 10х10",
+  "description": "Сервис для автоматического составления графиков работы и расписаний (по примеру Planimum).",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
