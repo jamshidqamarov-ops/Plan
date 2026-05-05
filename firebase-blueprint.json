@@ -1,0 +1,86 @@
+{
+  "entities": {
+    "Workspace": {
+      "title": "Workspace",
+      "description": "A workspace container",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string" },
+        "members": { "type": "array", "items": { "type": "string" } },
+        "globalMaxConsecutiveShifts": { "type": "number" },
+        "globalMaxConsecutiveDaysOff": { "type": "number" }
+      },
+      "required": ["ownerId", "members"]
+    },
+    "Employee": {
+      "title": "Employee",
+      "description": "An employee in a workspace",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "projectId": { "type": "string" },
+        "locationId": { "type": "string" },
+        "maxConsecutiveShifts": { "type": "number" },
+        "maxShiftsMonth": { "type": "number" },
+        "minShiftsMonth": { "type": "number" },
+        "minConsecutiveShifts": { "type": "number" },
+        "maxConsecutiveDaysOff": { "type": "number" },
+        "shiftPreference": { "type": "string" }
+      },
+      "required": ["name", "projectId", "locationId"]
+    },
+    "Project": {
+      "title": "Project",
+      "description": "A project in a workspace",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" }
+      },
+      "required": ["name"]
+    },
+    "Location": {
+      "title": "Location",
+      "description": "A location in a workspace",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "maxDesks": { "type": "number" },
+        "maxDesksWeekend": { "type": "number" }
+      },
+      "required": ["name", "maxDesks"]
+    },
+    "MonthData": {
+      "title": "MonthData",
+      "description": "Aggregated requirements, constraints, and schedule for a month",
+      "type": "object",
+      "properties": {
+        "requirements": { "type": "object" },
+        "constraints": { "type": "object" },
+        "schedule": { "type": "object" }
+      }
+    }
+  },
+  "firestore": {
+    "/workspaces/{workspaceId}": {
+      "schema": { "$ref": "#/entities/Workspace" },
+      "description": "Workspace for a group of users"
+    },
+    "/workspaces/{workspaceId}/employees/{employeeId}": {
+      "schema": { "$ref": "#/entities/Employee" },
+      "description": "Employees in the workspace"
+    },
+    "/workspaces/{workspaceId}/projects/{projectId}": {
+      "schema": { "$ref": "#/entities/Project" },
+      "description": "Projects in the workspace"
+    },
+    "/workspaces/{workspaceId}/locations/{locationId}": {
+      "schema": { "$ref": "#/entities/Location" },
+      "description": "Locations in the workspace"
+    },
+    "/workspaces/{workspaceId}/months/{monthKey}": {
+      "schema": { "$ref": "#/entities/MonthData" },
+      "description": "Monthly requirements, constraints, and schedule"
+    }
+  }
+}

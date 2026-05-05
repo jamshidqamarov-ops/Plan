@@ -17,9 +17,14 @@ export interface Location {
 export interface Employee {
   id: string;
   name: string;
+  email?: string;
   projectId: string;
   locationId: string;
   maxConsecutiveShifts?: number;
+  maxShiftsMonth?: number;
+  minShiftsMonth?: number;
+  minConsecutiveShifts?: number;
+  maxConsecutiveDaysOff?: number;
   shiftPreference?: ShiftPreference;
 }
 
@@ -42,7 +47,8 @@ export function generateSchedule(
   requirements: Record<string, Record<number, DayRequirements>>,
   constraints: Record<string, ConstraintType>,
   existingSchedule: Record<string, ShiftType | null>,
-  globalMaxConsecutiveShifts: number
+  globalMaxConsecutiveShifts: number,
+  globalMaxConsecutiveDaysOff: number
 ): Record<string, ShiftType | null> {
   const newSchedule: Record<string, ShiftType | null> = { ...existingSchedule };
   
@@ -77,10 +83,32 @@ export function generateSchedule(
       return (isWknd && typeof l.maxDesksWeekend === 'number' && !isNaN(l.maxDesksWeekend)) ? l.maxDesksWeekend : l.maxDesks;
     };
 
+    const getStreak = (empId: string): number => {
+      let streak = 0;
+      for (let d = day - 1; d >= 1; d--) {
+        if (newSchedule[`${empId}-${monthKey}-${d}`]) streak++;
+        else break;
+      }
+      return streak;
+    };
+
+    const getOffStreak = (empId: string): number => {
+      let streak = 0;
+      for (let d = day - 1; d >= 1; d--) {
+        const isOff = !newSchedule[`${empId}-${monthKey}-${d}`];
+        // Note: constraint Must_off or Vacation could also be considered 'off' but it's null in schedule anyway
+        if (isOff) streak++;
+        else break;
+      }
+      return streak;
+    };
+
     const availableEmployees: Employee[] = [];
 
     // First pass: assign mandatory workers, filter out mandatory off
     for (const emp of employees) {
+      if (emp.maxShiftsMonth && shiftCount[emp.id] >= emp.maxShiftsMonth) continue;
+
       if (!assignedByProj[emp.projectId]) assignedByProj[emp.projectId] = { D: 0, N: 0 };
       
       const key = `${emp.id}-${monthKey}-${day}`;
@@ -144,6 +172,23 @@ export function generateSchedule(
       projAvail.sort((a, b) => {
         let wA = shiftCount[a.id];
         let wB = shiftCount[b.id];
+        
+        const streakA = getStreak(a.id);
+        const streakB = getStreak(b.id);
+        const minStreakA = a.minConsecutiveShifts ?? 2;
+        const minStreakB = b.minConsecutiveShifts ?? 2;
+        
+        const offStreakA = getOffStreak(a.id);
+        const offStreakB = getOffStreak(b.id);
+        const maxOffA = a.maxConsecutiveDaysOff ?? globalMaxConsecutiveDaysOff;
+        const maxOffB = b.maxConsecutiveDaysOff ?? globalMaxConsecutiveDaysOff;
+        
+        if (streakA > 0 && streakA < minStreakA) wA -= 500;
+        if (streakB > 0 && streakB < minStreakB) wB -= 500;
+        
+        if (offStreakA >= maxOffA) wA -= 200;
+        if (offStreakB >= maxOffB) wB -= 200;
+        
         if (a.shiftPreference === 'prefer_day') wA -= 100;
         if (b.shiftPreference === 'prefer_day') wB -= 100;
         if (a.shiftPreference === 'prefer_night') wA += 100;
@@ -176,6 +221,23 @@ export function generateSchedule(
       projAvail.sort((a, b) => {
         let wA = shiftCount[a.id];
         let wB = shiftCount[b.id];
+        
+        const streakA = getStreak(a.id);
+        const streakB = getStreak(b.id);
+        const minStreakA = a.minConsecutiveShifts ?? 2;
+        const minStreakB = b.minConsecutiveShifts ?? 2;
+        
+        const offStreakA = getOffStreak(a.id);
+        const offStreakB = getOffStreak(b.id);
+        const maxOffA = a.maxConsecutiveDaysOff ?? globalMaxConsecutiveDaysOff;
+        const maxOffB = b.maxConsecutiveDaysOff ?? globalMaxConsecutiveDaysOff;
+        
+        if (streakA > 0 && streakA < minStreakA) wA -= 500;
+        if (streakB > 0 && streakB < minStreakB) wB -= 500;
+        
+        if (offStreakA >= maxOffA) wA -= 200;
+        if (offStreakB >= maxOffB) wB -= 200;
+
         if (a.shiftPreference === 'prefer_night') wA -= 100;
         if (b.shiftPreference === 'prefer_night') wB -= 100;
         if (a.shiftPreference === 'prefer_day') wA += 100;

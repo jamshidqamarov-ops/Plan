@@ -1,0 +1,80 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() { return request.auth != null; }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    
+    function isMember(workspaceId) {
+      return isSignedIn() && exists(/databases/$(database)/documents/workspaces/$(workspaceId));
+    }
+
+    match /workspaces/{workspaceId} {
+      function isValidWorkspace(data) {
+        return data.keys().hasAll(['ownerId', 'members']) &&
+               data.ownerId is string &&
+               data.members is list &&
+               data.members.size() <= 100 &&
+               data.members[0] is string;
+      }
+
+      allow get: if isSignedIn();
+      allow create: if isSignedIn() && isValidWorkspace(incoming()) && incoming().ownerId == request.auth.uid && request.auth.uid in incoming().members && isValidId(workspaceId);
+      allow update: if isSignedIn() &&
+                    isValidWorkspace(incoming()); // allow all affected keys for flexible syncing
+      allow delete: if isSignedIn() && existing().ownerId == request.auth.uid;
+
+      match /employees/{employeeId} {
+        function isValidEmployee(data) {
+          return data.keys().hasAll(['name', 'projectId', 'locationId']) &&
+                 data.name is string && data.name.size() <= 100 &&
+                 data.projectId is string && data.projectId.size() <= 128 &&
+                 data.locationId is string && data.locationId.size() <= 128;
+        }
+        allow read: if isMember(workspaceId);
+        allow create: if isMember(workspaceId) && isValidEmployee(incoming()) && isValidId(employeeId);
+        allow update: if isMember(workspaceId) && isValidEmployee(incoming());
+        allow delete: if isMember(workspaceId);
+      }
+
+      match /projects/{projectId} {
+        function isValidProject(data) {
+          return data.keys().hasAll(['name']) &&
+                 data.name is string && data.name.size() <= 100;
+        }
+        allow read: if isMember(workspaceId);
+        allow create: if isMember(workspaceId) && isValidProject(incoming()) && isValidId(projectId);
+        allow update: if isMember(workspaceId) && isValidProject(incoming());
+        allow delete: if isMember(workspaceId);
+      }
+
+      match /locations/{locationId} {
+        function isValidLocation(data) {
+          return data.keys().hasAll(['name', 'maxDesks']) &&
+                 data.name is string && data.name.size() <= 100 &&
+                 data.maxDesks is number;
+        }
+        allow read: if isMember(workspaceId);
+        allow create: if isMember(workspaceId) && isValidLocation(incoming()) && isValidId(locationId);
+        allow update: if isMember(workspaceId) && isValidLocation(incoming());
+        allow delete: if isMember(workspaceId);
+      }
+
+      match /months/{monthKey} {
+        function isValidMonthData(data) {
+          return data.keys().hasAny(['requirements', 'constraints', 'schedule']);
+        }
+        allow read: if isMember(workspaceId);
+        allow create: if isMember(workspaceId) && isValidMonthData(incoming()) && isValidId(monthKey);
+        allow update: if isMember(workspaceId) && isValidMonthData(incoming());
+        allow delete: if isMember(workspaceId);
+      }
+    }
+  }
+}

@@ -35,6 +35,7 @@ import {
   Location,
   Project
 } from './lib/autoSchedule';
+import { useWorkspace, WorkspaceData } from './lib/useWorkspace';
 
 function generateId() {
   return Math.random().toString(36).substring(2, 9);
@@ -59,19 +60,53 @@ const DEFAULT_EMPLOYEES: Employee[] = [
   { id: '5', name: 'Кузнецов Д.', projectId: 'p1', locationId: 'l3' },
 ];
 
+function useSyncedState<T>(
+  data: WorkspaceData | null, 
+  updateData: (u: Partial<WorkspaceData>) => void,
+  key: keyof WorkspaceData, 
+  fallback: T
+): [T, React.Dispatch<React.SetStateAction<T>>] {
+  const [local, setLocal] = useState<T>(fallback);
+
+  useEffect(() => {
+    if (data && data[key] !== undefined) {
+      setLocal(data[key] as T);
+    }
+  }, [data, key]);
+
+  const setter = (valOrUpdater: React.SetStateAction<T>) => {
+    setLocal(prev => {
+      const nextVal = typeof valOrUpdater === 'function' ? (valOrUpdater as any)(prev) : valOrUpdater;
+      updateData({ [key]: nextVal });
+      return nextVal;
+    });
+  };
+
+  return [local, setter];
+}
+
 export default function App() {
   const [currentMonth, setCurrentMonth] = useState(new Date());
+
+  const searchParams = new URLSearchParams(window.location.search);
+  let workspaceId = searchParams.get('workspace');
+  if (!workspaceId) {
+     workspaceId = generateId();
+     window.history.replaceState(null, '', `?workspace=${workspaceId}`);
+  }
+
+  const { user, data, loading, loginWithGoogle, updateData } = useWorkspace(workspaceId);
   
   // Data State
-  const [projects, setProjects] = useState<Project[]>(() => {
+  const [projects, setProjects] = useSyncedState<Project[]>(data, updateData, 'projects', () => {
     const saved = localStorage.getItem('planimum_projects');
     return saved ? JSON.parse(saved) : DEFAULT_PROJECTS;
   });
-  const [locations, setLocations] = useState<Location[]>(() => {
+  const [locations, setLocations] = useSyncedState<Location[]>(data, updateData, 'locations', () => {
     const saved = localStorage.getItem('planimum_locations');
     return saved ? JSON.parse(saved) : DEFAULT_LOCATIONS;
   });
-  const [employees, setEmployees] = useState<Employee[]>(() => {
+  const [employees, setEmployees] = useSyncedState<Employee[]>(data, updateData, 'employees', () => {
     const saved = localStorage.getItem('planimum_employees');
     return saved ? JSON.parse(saved) : DEFAULT_EMPLOYEES;
   });
@@ -79,25 +114,26 @@ export default function App() {
   const [activeModal, setActiveModal] = useState<'projects' | 'locations' | 'import' | null>(null);
   
   // monthKey -> projectId -> day -> DayRequirements
-  const [requirements, setRequirements] = useState<Record<string, Record<string, Record<number, DayRequirements>>>>(() => {
+  const [requirements, setRequirements] = useSyncedState<Record<string, Record<string, Record<number, DayRequirements>>>>(data, updateData, 'requirements', () => {
     const saved = localStorage.getItem('planimum_requirements');
     return saved ? JSON.parse(saved) : {};
   }); 
   
   // `${empId}-${monthKey}-${day}` -> ConstraintType
-  const [constraints, setConstraints] = useState<Record<string, ConstraintType>>(() => {
+  const [constraints, setConstraints] = useSyncedState<Record<string, ConstraintType>>(data, updateData, 'constraints', () => {
     const saved = localStorage.getItem('planimum_constraints');
     return saved ? JSON.parse(saved) : {};
   });
   
   // `${empId}-${monthKey}-${day}` -> ShiftType | null
-  const [schedule, setSchedule] = useState<Record<string, ShiftType | null>>(() => {
+  const [schedule, setSchedule] = useSyncedState<Record<string, ShiftType | null>>(data, updateData, 'schedule', () => {
     const saved = localStorage.getItem('planimum_schedule');
     return saved ? JSON.parse(saved) : {};
   });
 
   const [isConstraintMode, setIsConstraintMode] = useState(false);
-  const [globalMaxConsecutiveShifts, setGlobalMaxConsecutiveShifts] = useState(3);
+  const [globalMaxConsecutiveShifts, setGlobalMaxConsecutiveShifts] = useSyncedState(data, updateData, 'globalMaxConsecutiveShifts', 3);
+  const [globalMaxConsecutiveDaysOff, setGlobalMaxConsecutiveDaysOff] = useSyncedState(data, updateData, 'globalMaxConsecutiveDaysOff', 2);
 
   const daysInMonth = getDaysInMonth(currentMonth);
   const monthKey = format(currentMonth, 'yyyy-MM');
@@ -128,6 +164,15 @@ export default function App() {
       return next;
     });
   }, [monthKey, daysInMonth, projects]);
+
+  const [filterLocation, setFilterLocation] = useState<string>('all');
+  const [filterProject, setFilterProject] = useState<string>('all');
+
+  const filteredEmployees = employees.filter(emp => {
+    if (filterLocation !== 'all' && emp.locationId !== filterLocation) return false;
+    if (filterProject !== 'all' && emp.projectId !== filterProject) return false;
+    return true;
+  });
 
   const handlePrevMonth = () => setCurrentMonth(subMonths(currentMonth, 1));
   const handleNextMonth = () => setCurrentMonth(addMonths(currentMonth, 1));
@@ -161,8 +206,36 @@ export default function App() {
 
   const runAutoSchedule = () => {
     const reqsForMonth = requirements[monthKey] || {};
-    const newSchedule = generateSchedule(employees, locations, monthKey, daysInMonth, reqsForMonth, constraints, schedule, globalMaxConsecutiveShifts);
+    const newSchedule = generateSchedule(
+      employees, locations, monthKey, daysInMonth, reqsForMonth, 
+      constraints, schedule, globalMaxConsecutiveShifts, globalMaxConsecutiveDaysOff
+    );
     setSchedule(newSchedule);
+  };
+
+  const handleCellKeyDown = (e: React.KeyboardEvent, empId: string, day: number) => {
+    const key = `${empId}-${monthKey}-${day}`;
+    const char = e.key.toLowerCase();
+    
+    if (['d', 'в', 'д'].includes(char)) {
+       setSchedule(prev => ({...prev, [key]: '12д'}));
+       setConstraints(prev => ({...prev, [key]: null}));
+    } else if (['n', 'т', 'н'].includes(char)) {
+       setSchedule(prev => ({...prev, [key]: '12н'}));
+       setConstraints(prev => ({...prev, [key]: null}));
+    } else if (['o', 'щ', 'о'].includes(char)) {
+       setConstraints(prev => ({...prev, [key]: 'vacation'}));
+       setSchedule(prev => ({...prev, [key]: null}));
+    } else if (['x', 'ч', 'х'].includes(char)) {
+       setConstraints(prev => ({...prev, [key]: 'must_off'}));
+       setSchedule(prev => ({...prev, [key]: null}));
+    } else if (['b', 'и', 'б'].includes(char)) {
+       setConstraints(prev => ({...prev, [key]: 'sick'}));
+       setSchedule(prev => ({...prev, [key]: null}));
+    } else if (e.key === 'Backspace' || e.key === 'Delete') {
+       setConstraints(prev => ({...prev, [key]: null}));
+       setSchedule(prev => ({...prev, [key]: null}));
+    }
   };
 
   const toggleCell = (empId: string, day: number) => {
@@ -323,6 +396,12 @@ export default function App() {
         const name = parts[0];
         const projName = parts[1] || currProjects[0].name;
         const locName = parts[2] || currLocations[0].name;
+        const minConsecutiveShifts = parts[3] ? parseInt(parts[3]) : undefined;
+        const maxConsecutiveShifts = parts[4] ? parseInt(parts[4]) : undefined;
+        const minShiftsMonth = parts[5] ? parseInt(parts[5]) : undefined;
+        const maxShiftsMonth = parts[6] ? parseInt(parts[6]) : undefined;
+        const maxConsecutiveDaysOff = parts[7] ? parseInt(parts[7]) : undefined;
+        const shiftPrefStr = parts[8] || '';
 
         let proj = currProjects.find(p => p.name.toLowerCase() === projName.toLowerCase());
         if (!proj) {
@@ -336,11 +415,22 @@ export default function App() {
           currLocations.push(loc);
         }
 
+        let shiftPreference: any = 'standard';
+        if (['standard', 'only_day', 'only_night', 'prefer_day', 'prefer_night', 'day_only_weekdays'].includes(shiftPrefStr)) {
+          shiftPreference = shiftPrefStr;
+        }
+
         newEmployees.push({
           id: generateId(),
           name,
           projectId: proj.id,
-          locationId: loc.id
+          locationId: loc.id,
+          minConsecutiveShifts: !minConsecutiveShifts || isNaN(minConsecutiveShifts) ? undefined : minConsecutiveShifts,
+          maxConsecutiveShifts: !maxConsecutiveShifts || isNaN(maxConsecutiveShifts) ? undefined : maxConsecutiveShifts,
+          minShiftsMonth: !minShiftsMonth || isNaN(minShiftsMonth) ? undefined : minShiftsMonth,
+          maxShiftsMonth: !maxShiftsMonth || isNaN(maxShiftsMonth) ? undefined : maxShiftsMonth,
+          maxConsecutiveDaysOff: !maxConsecutiveDaysOff || isNaN(maxConsecutiveDaysOff) ? undefined : maxConsecutiveDaysOff,
+          shiftPreference
         });
       }
     }
@@ -356,6 +446,14 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-stone-50 font-sans text-stone-900 pb-20">
+      {!loading && !user && (
+        <div className="bg-red-500 text-white text-sm font-medium p-3 text-center shadow-lg sticky top-0 z-[100] flex items-center justify-center gap-3">
+          Вам нужно войти, чтобы синхронизировать и сохранять изменения (все измененения будут утеряны).
+          <button onClick={loginWithGoogle} className="bg-white text-red-600 px-3 py-1 rounded font-bold hover:bg-red-50 transition">
+            Войти через Google
+          </button>
+        </div>
+      )}
       {/* --- MODALS --- */}
       {activeModal === 'projects' && (
         <div className="fixed inset-0 z-[100] bg-stone-900/40 flex items-center justify-center p-4 backdrop-blur-sm">
@@ -461,21 +559,33 @@ export default function App() {
             </div>
             <div className="p-4 overflow-y-auto flex-1 flex flex-col gap-4">
               <p className="text-sm text-stone-600">
-                Скопируйте таблицу из Excel и вставьте ниже. Ожидаемый формат: <strong>3 колонки</strong> (имя, проект, локация).<br/>
+                Скопируйте таблицу из Excel и вставьте ниже. Ожидаемый формат: <strong>до 9 колонок</strong> (Имя, Проект, Локация, Мин подряд, Макс подряд, Мин за месяц, Макс за месяц, Макс выходных подряд, Предпочтение смены).<br/>
                 Если проект или локация не найдены, они будут созданы автоматически. <br/>
                 <em>Примечание: колонки разделяются табуляцией.</em>
               </p>
               
-              <div className="bg-stone-100 p-3 rounded-lg border border-stone-200 text-xs font-mono text-stone-500 overflow-x-auto">
-                <div className="flex gap-4">
-                  <div className="w-32 font-bold">Имя</div>
-                  <div className="w-32 font-bold">Название проекта</div>
-                  <div className="w-32 font-bold">Локация</div>
+              <div className="bg-stone-100 p-3 rounded-lg border border-stone-200 text-xs font-mono text-stone-500 overflow-x-auto nice-scrollbar">
+                <div className="flex gap-4 min-w-max">
+                  <div className="w-24 font-bold shrink-0">Имя</div>
+                  <div className="w-24 font-bold shrink-0">Проект</div>
+                  <div className="w-24 font-bold shrink-0">Локация</div>
+                  <div className="w-20 font-bold shrink-0">Мин подряд</div>
+                  <div className="w-20 font-bold shrink-0">Макс подряд</div>
+                  <div className="w-20 font-bold shrink-0">Мин в месяц</div>
+                  <div className="w-20 font-bold shrink-0">Макс в месяц</div>
+                  <div className="w-24 font-bold shrink-0">Макс выходных</div>
+                  <div className="w-24 font-bold shrink-0">Предпочтение</div>
                 </div>
-                <div className="flex gap-4 mt-1 opacity-70">
-                  <div className="w-32 truncate border-r border-stone-300 pr-2">Иванов Петр</div>
-                  <div className="w-32 truncate border-r border-stone-300 pr-2">Поддержка B2B</div>
-                  <div className="w-32 truncate">Офис Москва</div>
+                <div className="flex gap-4 mt-1 opacity-70 min-w-max">
+                  <div className="w-24 shrink-0 truncate border-r border-stone-300 pr-2">Иванов Петр</div>
+                  <div className="w-24 shrink-0 truncate border-r border-stone-300 pr-2">Поддержка B2B</div>
+                  <div className="w-24 shrink-0 truncate border-r border-stone-300 pr-2">Офис Москва</div>
+                  <div className="w-20 shrink-0 truncate border-r border-stone-300 pr-2">2</div>
+                  <div className="w-20 shrink-0 truncate border-r border-stone-300 pr-2">4</div>
+                  <div className="w-20 shrink-0 truncate border-r border-stone-300 pr-2">14</div>
+                  <div className="w-20 shrink-0 truncate border-r border-stone-300 pr-2">16</div>
+                  <div className="w-24 shrink-0 truncate border-r border-stone-300 pr-2">2</div>
+                  <div className="w-24 shrink-0 truncate pr-2">standard</div>
                 </div>
               </div>
 
@@ -521,7 +631,7 @@ export default function App() {
 
         <div className="flex flex-wrap items-center justify-center gap-3 w-full md:w-auto">
           <div className="flex items-center gap-2 text-sm bg-white border border-stone-200 px-3 py-1.5 rounded-lg shadow-sm w-full md:w-auto">
-            <span className="font-semibold text-stone-600 truncate">Смен подряд по умолч:</span>
+            <span className="font-semibold text-stone-600 truncate" title="По умолчанию">Макс. подряд смен:</span>
             <input 
               type="number" 
               min="1" 
@@ -531,6 +641,19 @@ export default function App() {
               onChange={e => {
                 const v = parseInt(e.target.value);
                 if (!isNaN(v) && v > 0) setGlobalMaxConsecutiveShifts(v);
+              }}
+            />
+            <div className="w-px h-5 bg-stone-300 mx-1"></div>
+            <span className="font-semibold text-stone-600 truncate" title="По умолчанию">Выходных:</span>
+            <input 
+              type="number" 
+              min="1" 
+              max="31"
+              className="w-12 text-center border border-stone-300 rounded font-bold bg-stone-50 outline-none focus:ring-1 focus:ring-indigo-500"
+              value={globalMaxConsecutiveDaysOff}
+              onChange={e => {
+                const v = parseInt(e.target.value);
+                if (!isNaN(v) && v > 0) setGlobalMaxConsecutiveDaysOff(v);
               }}
             />
           </div>
@@ -588,6 +711,25 @@ export default function App() {
           </div>
         )}
 
+        <div className="flex gap-4 mb-4">
+          <select 
+            value={filterProject} 
+            onChange={(e) => setFilterProject(e.target.value)}
+            className="px-3 py-2 border border-stone-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-sky-500 bg-white"
+          >
+            <option value="all">Все проекты</option>
+            {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <select 
+            value={filterLocation} 
+            onChange={(e) => setFilterLocation(e.target.value)}
+            className="px-3 py-2 border border-stone-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-amber-500 bg-white"
+          >
+            <option value="all">Все локации</option>
+            {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+          </select>
+        </div>
+
         <div className="bg-white rounded-2xl shadow-xl border border-stone-200 overflow-hidden">
           <div className="overflow-x-auto nice-scrollbar">
             <table className="w-full border-collapse text-sm">
@@ -595,7 +737,7 @@ export default function App() {
                 <tr>
                   <th className="sticky left-0 z-20 bg-stone-100 border-b border-r border-stone-200 p-3 text-left w-64 shadow-[2px_0_5px_-3px_rgba(0,0,0,0.1)]">
                     <div className="flex justify-between items-center">
-                      <span className="font-semibold text-stone-700">Сотрудники ({employees.length})</span>
+                      <span className="font-semibold text-stone-700">Сотрудники ({filteredEmployees.length})</span>
                       <div className="flex items-center gap-1">
                         <button onClick={() => setActiveModal('projects')} className="text-blue-600 hover:bg-blue-100 bg-blue-50 p-1.5 rounded transition" title="Управление проектами">
                           <Briefcase size={16} />
@@ -633,7 +775,7 @@ export default function App() {
                 </tr>
               </thead>
               <tbody>
-                {employees.map(emp => {
+                {filteredEmployees.map(emp => {
                   const shiftCount = headerDays.reduce((sum, d) => sum + (schedule[`${emp.id}-${monthKey}-${d}`] ? 1 : 0), 0);
                   
                   return (
@@ -683,16 +825,71 @@ export default function App() {
                             </select>
                           </div>
                           <div className="flex flex-row items-center justify-between pt-1 mt-0.5 border-t border-stone-100">
-                             <span className="text-[9px] text-stone-500 font-medium">Макс. подряд смен</span>
+                             <span className="text-[9px] text-stone-500 font-medium truncate pr-1" title="Смен подряд (Мин-Макс) / Всего смен в месяц">Смены: подряд / месяц</span>
+                             <div className="flex gap-0.5">
+                               <input 
+                                 type="number" 
+                                 min="1"
+                                 className="w-7 text-[10px] px-0.5 py-0 border border-stone-200 rounded text-center bg-stone-100"
+                                 placeholder="2"
+                                 title="Мин. подряд (по умолчанию 2)"
+                                 value={emp.minConsecutiveShifts ?? ''}
+                                 onChange={e => {
+                                   const val = parseInt(e.target.value);
+                                   updateEmployee(emp.id, 'minConsecutiveShifts', isNaN(val) ? undefined : val);
+                                 }}
+                               />
+                               <input 
+                                 type="number" 
+                                 min="1"
+                                 className="w-7 text-[10px] px-0.5 py-0 border border-stone-200 rounded text-center bg-stone-100"
+                                 placeholder={String(globalMaxConsecutiveShifts)}
+                                 title={`Макс. подряд смен (по умолч. ${globalMaxConsecutiveShifts})`}
+                                 value={emp.maxConsecutiveShifts ?? ''}
+                                 onChange={e => {
+                                   const val = parseInt(e.target.value);
+                                   updateEmployee(emp.id, 'maxConsecutiveShifts', isNaN(val) ? undefined : val);
+                                 }}
+                               />
+                               <span className="text-stone-300">|</span>
+                               <input 
+                                 type="number" 
+                                 min="1"
+                                 className="w-7 text-[10px] px-0.5 py-0 border border-stone-200 rounded text-center bg-stone-100"
+                                 placeholder="Мин"
+                                 title="Мин. смен в месяц"
+                                 value={emp.minShiftsMonth ?? ''}
+                                 onChange={e => {
+                                   const val = parseInt(e.target.value);
+                                   updateEmployee(emp.id, 'minShiftsMonth', isNaN(val) ? undefined : val);
+                                 }}
+                               />
+                               <input 
+                                 type="number" 
+                                 min="1"
+                                 className="w-7 text-[10px] px-0.5 py-0 border border-stone-200 rounded text-center bg-stone-100"
+                                 placeholder="Макс"
+                                 title="Макс. смен в месяц"
+                                 value={emp.maxShiftsMonth ?? ''}
+                                 onChange={e => {
+                                   const val = parseInt(e.target.value);
+                                   updateEmployee(emp.id, 'maxShiftsMonth', isNaN(val) ? undefined : val);
+                                 }}
+                               />
+                             </div>
+                          </div>
+                          <div className="flex flex-row items-center justify-between pt-0.5">
+                             <span className="text-[9px] text-stone-500 font-medium truncate pr-1" title="Максимальное количество выходных подряд">Макс. выходных подряд</span>
                              <input 
                                type="number" 
                                min="1"
-                               className="w-10 text-[10px] px-1 py-0 border border-stone-200 rounded text-center bg-stone-100"
-                               placeholder={String(globalMaxConsecutiveShifts)}
-                               value={emp.maxConsecutiveShifts ?? ''}
+                               className="w-7 text-[10px] px-0.5 py-0 border border-stone-200 rounded text-center bg-stone-100"
+                               placeholder={String(globalMaxConsecutiveDaysOff)}
+                               title={`Макс. выходных подряд (по умолч. ${globalMaxConsecutiveDaysOff})`}
+                               value={emp.maxConsecutiveDaysOff ?? ''}
                                onChange={e => {
                                  const val = parseInt(e.target.value);
-                                 updateEmployee(emp.id, 'maxConsecutiveShifts', isNaN(val) ? undefined : val);
+                                 updateEmployee(emp.id, 'maxConsecutiveDaysOff', isNaN(val) ? undefined : val);
                                }}
                              />
                           </div>
@@ -731,7 +928,10 @@ export default function App() {
                           <td 
                             key={day} 
                             onClick={() => toggleCell(emp.id, day)}
-                            className={cn("border-b border-r border-stone-200 p-0 text-center cursor-pointer transition-colors relative", cellBg)}
+                            onKeyDown={(e) => handleCellKeyDown(e, emp.id, day)}
+                            tabIndex={0}
+                            title="Нажимайте 'д', 'н', 'о' (отпуск), 'х' (выходной), 'б' (болеет) или Delete"
+                            className={cn("border-b border-r border-stone-200 p-0 text-center cursor-pointer transition-colors relative outline-none focus:ring-inset focus:ring-2 focus:ring-sky-500", cellBg)}
                           >
                             <div className="w-full h-12 flex items-center justify-center font-medium text-xs">
                               {cellContent}
@@ -751,6 +951,31 @@ export default function App() {
                     </tr>
                   );
                 })}
+                
+                {/* ---------------- DAILY TOTALS ROW ---------------- */}
+                <tr className="bg-stone-100 font-bold text-[10px] text-stone-600">
+                  <td className="sticky left-0 z-10 p-2 border-y border-r border-stone-200 bg-stone-100 shadow-[2px_0_5px_-3px_rgba(0,0,0,0.1)]">
+                    Итого смен в день
+                  </td>
+                  {headerDays.map(day => {
+                    let totalD = 0;
+                    let totalN = 0;
+                    filteredEmployees.forEach(emp => {
+                      const shift = schedule[`${emp.id}-${monthKey}-${day}`];
+                      if (shift === '12д') totalD++;
+                      if (shift === '12н') totalN++;
+                    });
+                    return (
+                      <td key={`total-${day}`} className="border-b border-r border-stone-200 p-1 text-center bg-stone-50/50">
+                        <div className="flex flex-col gap-0.5">
+                          <span className={cn("text-[11px]", totalD > 0 ? "text-sky-700" : "text-transparent")}>{totalD}</span>
+                          <span className={cn("text-[11px]", totalN > 0 ? "text-indigo-700" : "text-transparent")}>{totalN}</span>
+                        </div>
+                      </td>
+                    );
+                  })}
+                  <td className="border-b border-stone-200 p-2 bg-stone-100"></td>
+                </tr>
                 
                 {/* ---------------- PROJECT REQUIREMENTS ROW ---------------- */}
                 {projects.map(proj => {
