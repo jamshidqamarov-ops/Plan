@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { db, auth, loginWithGoogle } from './firebase';
+import { db, auth, loginWithGoogle, loginWithEmail, registerWithEmail, logout } from './firebase';
 import { doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
 import { Employee, Project, Location, DayRequirements, ConstraintType, ShiftType } from './autoSchedule';
 
@@ -70,5 +70,5 @@ export function useWorkspace(workspaceId: string | null) {
     }
   }
 
-  return { user, data, loading, loginWithGoogle, updateData };
+  return { user, data, loading, loginWithGoogle, loginWithEmail, registerWithEmail, logout, updateData };
 }
